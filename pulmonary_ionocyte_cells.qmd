@@ -1,0 +1,353 @@
+---
+title: "CellMentor - Testing with Pulmonary Ionocyte Dataset"
+format: html
+editor: visual
+---
+
+# CellMentor - Testing with Pulmonary Ionocyte Dataset
+
+## Install / load packages
+
+```{r}
+required_pkgs <- c("Matrix", "ggplot2", "dplyr", "Seurat", "CellMentor")
+for (pkg in required_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    if (pkg == "CellMentor") {
+      if (!requireNamespace("BiocManager", quietly = TRUE))
+        install.packages("BiocManager")
+      BiocManager::install("CellMentor")
+    } else {
+      install.packages(pkg)
+    }
+  }
+}
+
+library(Matrix)
+library(ggplot2)
+library(dplyr)
+library(Seurat)
+library(CellMentor)
+
+set.seed(100)
+```
+
+## Download the data
+
+The droplet UMI count matrix is \~13 MB gzipped - manageable. Rows = genes, Columns = cells (tab-separated, first row = header)
+
+```{r}
+DATA_URL <- paste0(
+  "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE103nnn/",
+  "GSE103354/suppl/GSE103354_Trachea_droplet_UMIcounts.txt.gz"
+)
+local_file <- "GSE103354_Trachea_droplet_UMIcounts.txt.gz"
+
+if (!file.exists(local_file)) {
+  message("Downloading GSE103354 droplet UMI counts …")
+  download.file(DATA_URL, destfile = local_file, mode = "wb")
+}
+```
+
+## Load and inspect the count matrix
+
+```{r}
+message("Reading count matrix …")
+raw <- read.table(
+  gzfile(local_file),
+  header    = TRUE,
+  sep       = "\t",
+  row.names = 1,
+  check.names = FALSE
+)
+# Dimensions: ~18,000 genes × ~7,193 cells
+message(sprintf("Matrix dimensions: %d genes × %d cells", nrow(raw), ncol(raw)))
+```
+
+```{r}
+raw
+```
+
+## Parse cell-type labels from column names
+
+```{r}
+# Column names have the format:  <MouseID>_<Barcode>_<CellType>
+# e.g. "M1_GCTTGAGAAGTCGT_Club"  or  "M3_TTTGCGCGTTAAGAAA_Ionocyte"
+# M1–M6 are individual mouse IDs; the cell type is the last field.
+col_names   <- colnames(raw)
+celltypes   <- sub(".*_", "", col_names)        # last field  → cell type
+mouse_ids   <- sub("_.*", "", col_names)        # first field → M1 … M6 (batch)
+ 
+# How many of each type?
+type_counts <- sort(table(celltypes), decreasing = TRUE)
+message("Cell type counts:")
+print(type_counts)
+# Expected: Basal, Club, Ciliated, Goblet, Tuft, Neuroendocrine,
+#           Ionocyte, Hillock-associated, Squamous, etc.
+ 
+message("Mouse ID / batch counts:")
+print(table(mouse_ids))
+```
+
+## Convert to sparse matrix
+
+```{r}
+counts <- Matrix(as.matrix(raw), sparse = TRUE)
+```
+
+## Reference / Query split
+
+```{r}
+# Strategy: use 70 % of each cell type as REFERENCE, 30 % as QUERY.
+# This ensures every cell type (including rare ionocytes) appears in both.
+
+create_split <- function(counts, celltypes, mouse_ids, ref_frac = 0.70, seed = 100) {
+  set.seed(seed)
+  all_types <- unique(celltypes)
+  ref_idx   <- c()
+  qry_idx   <- c()
+  for (ct in all_types) {
+    idx     <- which(celltypes == ct)
+    n_ref   <- max(1, round(length(idx) * ref_frac))
+    chosen  <- sample(idx, n_ref)
+    ref_idx <- c(ref_idx, chosen)
+    qry_idx <- c(qry_idx, setdiff(idx, chosen))
+  }
+  list(
+    ref_counts    = counts[, ref_idx],
+    ref_celltypes = setNames(celltypes[ref_idx], colnames(counts)[ref_idx]),
+    ref_mouse_ids = mouse_ids[ref_idx],
+    qry_counts    = counts[, qry_idx],
+    qry_celltypes = setNames(celltypes[qry_idx], colnames(counts)[qry_idx]),
+    qry_mouse_ids = mouse_ids[qry_idx]
+  )
+}
+ 
+splits <- create_split(counts, celltypes, mouse_ids, ref_frac = 0.70)
+ 
+ref_counts    <- splits$ref_counts
+ref_celltypes <- splits$ref_celltypes
+qry_counts    <- splits$qry_counts
+qry_celltypes <- splits$qry_celltypes
+ 
+message(sprintf(
+  "Reference: %d cells | Query: %d cells",
+  ncol(ref_counts), ncol(qry_counts)
+))
+message("Cell-type distribution in reference:")
+print(table(ref_celltypes))
+message("Cell-type distribution in query:")
+print(table(qry_celltypes))
+```
+
+## Create the CSFNMF object
+
+```{r}
+message("Creating CSFNMF object …")
+csfnmf_obj <- CreateCSFNMFobject(
+  ref_matrix    = ref_counts,
+  ref_celltype  = ref_celltypes,
+  data_matrix   = qry_counts,
+  norm          = TRUE,     # library-size normalization
+  most.variable = TRUE,     # select highly variable genes
+  scale         = TRUE,
+  scale_by      = "cells",
+  verbose       = TRUE,
+  num_cores     = 10         # increase/decrease depending on your # of cores
+)
+```
+
+## Run CellMentor - parameter search
+
+```{r}
+# Using the "safe" default ranges recommended in the paper's supplement.
+# Reduce ranges further (e.g. alpha_range = c(1), beta_range = c(1)) if slow.
+message("Running CellMentor parameter search …")
+optimal_params <- CellMentor(
+  csfnmf_obj,
+  alpha_range = c(1, 5),
+  beta_range  = c(6, 7),
+  gamma_range = c(0.1),
+  delta_range = c(1),
+  num_cores   = 10,
+  verbose     = TRUE
+)
+ 
+best_model <- optimal_params$best_model
+K_VALUE    <- best_model@parameters$rank
+ 
+message("Best parameters:")
+print(optimal_params$best_params)
+message(sprintf("Optimal rank K = %d", K_VALUE))
+```
+
+## Project query data onto learned latent space
+
+```{r}
+message("Projecting query data …")
+h_project <- project_data(
+  W        = best_model@W,
+  X        = best_model@matrices@data,
+  num_cores = 10,
+  verbose  = TRUE
+)
+```
+
+## Seurat integration & UMAP visualization
+
+```{r}
+message("Building Seurat object and running UMAP")
+
+rownames(qry_counts) <- make.unique(rownames(qry_counts))
+seu <- CreateSeuratObject(counts = qry_counts)
+seu$celltype  <- qry_celltypes
+seu$mouse_id  <- splits$qry_mouse_ids
+
+# Add CellMentor reduction
+seu[["CellMentor"]] <- CreateDimReducObject(
+  embeddings = t(as.matrix(h_project)),
+  key        = "CellMentor_",
+  assay      = DefaultAssay(seu),
+  loadings   = as.matrix(best_model@W)
+)
+
+# UMAP on CellMentor dimensions
+seu <- RunUMAP(seu, reduction = "CellMentor", dims = 1:K_VALUE)
+```
+
+## Plots
+
+```{r}
+# UMAP colored by annotated cell type
+p1 <- DimPlot(seu, group.by = "celltype", label = TRUE, repel = TRUE) +
+  ggtitle("CellMentor UMAP – Mouse Tracheal Epithelium (Query)\nColored by cell type") +
+  theme(legend.position = "right")
+
+p1
+```
+
+```{r}
+# UMAP - highlight ionocytes specifically
+seu$is_ionocyte <- seu$celltype == "Ionocyte"
+p2 <- DimPlot(
+  seu,
+  group.by = "is_ionocyte",
+  cols     = c("TRUE" = "#E63946", "FALSE" = "grey80"),
+  order    = "TRUE",
+  pt.size  = 1.2
+) +
+  ggtitle("Ionocytes highlighted on CellMentor UMAP") +
+  theme_bw()
+
+p2
+```
+
+## Quantitative Evaluation (ARI and NMI)
+```{r}
+# Following the paper's Methods:
+#   1. Graph-based clustering on the CellMentor latent space
+#   2. Compare clusters to ground-truth cell types using ARI and NMI
+# Default resolution in the paper: 0.1
+
+if (!requireNamespace("aricode", quietly = TRUE)) install.packages("aricode")
+library(aricode)
+
+evaluate_clustering <- function(seu, K, resolution = 0.1) {
+  seu <- FindNeighbors(seu, reduction = "CellMentor", dims = 1:K, verbose = FALSE)
+  seu <- FindClusters(seu, resolution = resolution, verbose = FALSE)
+
+  clusters <- as.integer(seu$seurat_clusters)
+  truth    <- as.integer(factor(seu$celltype))
+
+  ari <- ARI(clusters, truth)
+  nmi <- NMI(clusters, truth)
+
+  n_clusters <- length(unique(clusters))
+  n_types    <- length(unique(seu$celltype))
+
+  message(sprintf(
+    "resolution=%.2f | clusters=%d (true types=%d) | ARI=%.3f | NMI=%.3f",
+    resolution, n_clusters, n_types, ari, nmi
+  ))
+
+  list(
+    seu        = seu,
+    ari        = ari,
+    nmi        = nmi,
+    n_clusters = n_clusters,
+    resolution = resolution
+  )
+}
+```
+
+```{r}
+message("\nClustering evaluation at resolution = 0.1")
+
+eval_res <- evaluate_clustering(
+  seu,
+  K_VALUE,
+  resolution = 0.1
+)
+```
+
+```{r}
+# Sweep resolutions to assess clustering stability and match expected cell types
+message("\nResolution sweep:")
+
+resolutions <- c(0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5)
+
+sweep_results <- lapply(resolutions, function(r) {
+  evaluate_clustering(seu, K_VALUE, resolution = r)
+})
+
+sweep_df <- data.frame(
+  resolution = sapply(sweep_results, `[[`, "resolution"),
+  n_clusters = sapply(sweep_results, `[[`, "n_clusters"),
+  ARI        = sapply(sweep_results, `[[`, "ari"),
+  NMI        = sapply(sweep_results, `[[`, "nmi")
+)
+
+message("\nResolution sweep summary:")
+print(sweep_df)
+```
+
+```{r}
+if (!requireNamespace("tidyr", quietly = TRUE)) install.packages("tidyr")
+library(tidyr)
+
+sweep_long <- pivot_longer(
+  sweep_df,
+  cols = c("ARI", "NMI"),
+  names_to = "metric",
+  values_to = "score"
+)
+
+p_sweep <- ggplot(sweep_long, aes(x = resolution, y = score,
+                                  colour = metric, group = metric)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  geom_vline(xintercept = 0.1, linetype = "dashed", colour = "grey50") +
+  annotate("text", x = 0.11, y = 0.1, label = "paper default",
+           hjust = 0, colour = "grey40", size = 3.5) +
+  scale_colour_manual(values = c("ARI" = "#2166ac", "NMI" = "#d6604d")) +
+  labs(
+    x = "Clustering resolution",
+    y = "Score",
+    colour = "Metric",
+    title = "CellMentor clustering performance vs resolution"
+  ) +
+  theme_bw(base_size = 12)
+
+p_sweep
+```
+
+```{r}
+summary_df <- data.frame(
+  resolution = eval_res$resolution,
+  ARI        = round(eval_res$ari, 3),
+  NMI        = round(eval_res$nmi, 3),
+  n_clusters = eval_res$n_clusters
+)
+
+message("\nFinal clustering metrics")
+print(summary_df)
+```
