@@ -1,24 +1,4 @@
-# =============================================================================
-# replicate_figures.R
-# -----------------------------------------------------------------------------
-# Reproduces publication-adjacent figures using the Baron -> Muraro dataset,
-# the only non-deprecated dataset in the current CellMentor package.
-#
-# Requires: baron_muraro_results.rds produced by run_extension_demo.R
-#
-# Produces (in extension/figures/replication/):
-#   figA_umap_projection.png     -- mirrors Figure A (p.7) of the CellMentor paper
-#   figB_ari_nmi_resolution.png  -- ARI/NMI vs clustering resolution sweep
-#   figB_resolution_sweep.csv    -- numeric scores at each resolution
-#   figC_ari_nmi_table.csv       -- ARI/NMI at default resolution (compare Table 1)
-#
-# Usage (SCC):
-#   qsub replication/submit_replication.sh
-# Or interactively:
-#   Rscript replication/replicate_figures.R
-# =============================================================================
-
-set.seed(100)
+#set.seed(100)
 
 BASE    <- "/projectnb/ds596/students/aliviap/DS596-Final-Project"
 R_LIBS  <- "/projectnb/ds596/students/aliviap/R_libs_4.5.2"
@@ -61,7 +41,7 @@ K_VALUE     <- best_model@parameters$rank
 message(sprintf("Loaded: %d query cells, K=%d", ncol(h_project), K_VALUE))
 
 
-# ---- Figure A: Publication-style UMAP ---------------------------------------
+# Figure A: Publication-style UMAP
 
 message("Building Figure A: publication-style projection UMAP...")
 
@@ -104,7 +84,7 @@ ggsave(file.path(OUTDIR, "figA_umap_projection.png"),
 message("Wrote: figA_umap_projection.png")
 
 
-# ---- Figure B: ARI/NMI resolution sweep ------------------------------------
+#Figure B: ARI/NMI resolution sweep
 
 message("Building Figure B: ARI/NMI resolution sweep...")
 
@@ -148,7 +128,7 @@ ggsave(file.path(OUTDIR, "figB_ari_nmi_resolution.png"),
 message("Wrote: figB_ari_nmi_resolution.png")
 
 
-# ---- Figure C: ARI/NMI at paper default -------------------------------------
+# Figure C: ARI/NMI at paper default
 
 message("Computing ARI/NMI at default resolution (0.1)...")
 
