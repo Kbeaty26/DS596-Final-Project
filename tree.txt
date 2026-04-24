@@ -1,0 +1,41 @@
+.
+├── Additional Data Set Runs
+│   ├── DataSetSources.md
+│   ├── fibroblast_checkin.R
+│   ├── figureA_muraro_pancreatic_tissue.qmd
+│   ├── mice_synovium_cells.R
+│   ├── mice synovium plots
+│   │   ├── Control_plot_res_0.3.png
+│   │   ├── control_plot_res_0.4.png
+│   │   ├── Control_plot_res_0.5.png
+│   │   ├── MMS_plot_res_0.3.png
+│   │   ├── MMS_plot_res_0.4.png
+│   │   └── MMS_plot_res_0.5.png
+│   ├── Muraro_DemoData_UMAP.png
+│   ├── pulmonary_ionocyte_cells.qmd
+│   ├── pulmonary ionocyte plots
+│   │   ├── ClusteringPerformanceVsResolution.png
+│   │   ├── IonocytesHighlighted_UMAP.png
+│   │   └── MouseTrachealEpithelium_UMAP.png
+│   └── updatedumapcellmentor.png
+├── extension
+│   ├── ADDING_TO_YOUR_PIPELINE.md
+│   ├── diagnostics.R
+│   ├── figures
+│   │   ├── 01_error_distributions.png
+│   │   ├── 02_confidence_distribution.png
+│   │   ├── 03_umap_all_panels.png
+│   │   ├── baron_muraro_diagnostics.csv
+│   │   └── replication
+│   ├── plotting.R
+│   ├── quick_test.sh
+│   ├── run_extension_demo.R
+│   ├── setup.sh
+│   └── submit_extension.sh
+├── README.md
+├── replication
+│   ├── replicate_figures.R
+│   └── submit_replication.sh
+└── tree.txt
+
+7 directories, 31 files
